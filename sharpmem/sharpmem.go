@@ -89,9 +89,9 @@ func (d *Device) SetPixel(x, y int16, c color.RGBA) {
 	mod := uint8(i % 8)
 
 	prev := hasBit(d.buffer[div], mod)
-	curr := true
+	var curr bool
 	if c.R == 0 && c.G == 0 && c.B == 0 && c.A == 255 {
-		curr = false
+		curr = true
 	}
 
 	if prev == curr {
