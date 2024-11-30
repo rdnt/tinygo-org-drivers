@@ -1,3 +1,5 @@
+//go:build tinygo
+
 package sharpmem
 
 import (
@@ -8,11 +10,12 @@ import (
 )
 
 const (
-	bitWritecmd = 0x01
+	bitWriteCmd = 0x01
 	bitVcom     = 0x02
 	bitClear    = 0x04
 )
 
+// Device represents a Sharp Memory Display device.
 type Device struct {
 	bus        drivers.SPI
 	csPin      machine.Pin
@@ -25,14 +28,39 @@ type Device struct {
 	vcom       uint8
 }
 
-func New(bus drivers.SPI, csPin machine.Pin) Device {
+type Config struct {
+	Width  int16
+	Height int16
+}
+
+// NewSPI creates a new connection.
+// The SPI bus must have already been configured.
+func NewSPI(bus drivers.SPI, csPin machine.Pin) Device {
 	d := Device{
-		bus:    bus,
-		csPin:  csPin,
-		width:  160,
-		height: 68,
+		bus:   bus,
+		csPin: csPin,
+	}
+	return d
+}
+
+// Configure initializes the display with specified configuration.
+func (d *Device) Configure(cfg Config) {
+	if cfg.Width != 0 {
+		d.width = cfg.Width
+	} else {
+		d.width = 128
+	}
+	if cfg.Height != 0 {
+		d.height = cfg.Height
+	} else {
+		d.height = 64
 	}
 
+	d.initialize()
+}
+
+// initialize properly initializes the display and the in-memory image buffers.
+func (d *Device) initialize() {
 	d.csPin.Low()
 
 	d.vcom = bitVcom
@@ -40,7 +68,7 @@ func New(bus drivers.SPI, csPin machine.Pin) Device {
 	d.bufferSize = d.width * d.height / 8
 	d.buffer = make([]byte, d.bufferSize)
 
-	d.lineDiff = make([]byte, d.height/8+1)
+	d.lineDiff = make([]byte, bitfieldBufLen(d.height))
 
 	for i := range d.buffer {
 		d.buffer[i] = 0xff
@@ -49,31 +77,31 @@ func New(bus drivers.SPI, csPin machine.Pin) Device {
 	var bytesPerLine = d.width / 8
 
 	d.lineBuf = make([]byte, bytesPerLine+2)
-
-	return d
 }
 
+// SetPixel enables or disables a pixel in the buffer
+// color.RGBA{0, 0, 0, 255} is considered transparent, anything else
+// will enable a pixel on the screen.
 func (d *Device) SetPixel(x, y int16, c color.RGBA) {
 	i := x + y*d.width
 
 	div := i / 8
 	mod := uint8(i % 8)
 
-	curr := hasBit(d.buffer[div], mod)
-	white := (c.R > 0 || c.G > 0 || c.B > 0) && c.A > 0
-	var next bool
-	if white {
-		next = true
+	prev := hasBit(d.buffer[div], mod)
+	curr := true
+	if c.R == 0 && c.G == 0 && c.B == 0 && c.A == 255 {
+		curr = false
 	}
 
-	if next == curr {
+	if prev == curr {
 		return
 	}
 
-	if white {
+	if curr {
 		d.buffer[div] = setBit(d.buffer[div], mod)
 	} else {
-		d.buffer[div] = clearBit(d.buffer[div], mod)
+		d.buffer[div] = unsetBit(d.buffer[div], mod)
 	}
 
 	linediv := y / 8
@@ -81,10 +109,13 @@ func (d *Device) SetPixel(x, y int16, c color.RGBA) {
 	d.lineDiff[linediv] = setBit(d.lineDiff[linediv], linemod)
 }
 
+// Size returns the current size of the display.
 func (d *Device) Size() (x, y int16) {
 	return d.width, d.height
 }
 
+// Display sends the whole buffer to the screen. If a line hasn't changed,
+// it will not be transferred. It should ideally be called at >=1hz.
 func (d *Device) Display() error {
 	defer func() {
 		for i := 0; i < len(d.lineDiff); i++ {
@@ -96,7 +127,7 @@ func (d *Device) Display() error {
 	d.csPin.High()
 
 	// send write command
-	_, err := d.bus.Transfer(d.vcom | bitWritecmd)
+	_, err := d.bus.Transfer(d.vcom | bitWriteCmd)
 	if err != nil {
 		return err
 	}
@@ -144,7 +175,25 @@ func (d *Device) Display() error {
 	return nil
 }
 
+// Clear clears both the in-memory buffer and the display.
 func (d *Device) Clear() error {
+	d.ClearBuffer()
+	return d.ClearDisplay()
+}
+
+// ClearBuffer clears the in-memory buffer. The display is not updated.
+func (d *Device) ClearBuffer() {
+	for i := 0; i < len(d.buffer); i++ {
+		d.buffer[i] = 0xff
+	}
+
+	for i := 0; i < len(d.lineDiff); i++ {
+		d.lineDiff[i] = 0x00
+	}
+}
+
+// ClearDisplay clears the display. The in-memory buffer is not updated.
+func (d *Device) ClearDisplay() error {
 	// begin transaction
 	d.csPin.High()
 
@@ -166,29 +215,15 @@ func (d *Device) Clear() error {
 	return nil
 }
 
-// toggleVcom toggles the VCOM, as is instructed by the datasheet. Toggling VCOM
-// can help maintain the display's longevity. It should ideally be called at
-// least once per second.
+// toggleVcom toggles the VCOM, as is instructed by the datasheet.
+// Toggling VCOM can help maintain the display's longevity. It should ideally
+// be called at least once per second, preferably at 4-100 Hz.
+// Toggling VCOM causes a tiny bit of flicker, but without it the pixels can
+// be permanently damaged by the DC bias accumulating over time.
 func (d *Device) toggleVcom() {
 	if d.vcom != 0 {
 		d.vcom = 0x00
 	} else {
 		d.vcom = bitVcom
 	}
-}
-
-func setBit(n uint8, pos uint8) uint8 {
-	n |= 1 << pos
-	return n
-}
-
-// Clears the bit at pos in n.
-func clearBit(n uint8, pos uint8) uint8 {
-	n &^= 1 << pos
-	return n
-}
-
-func hasBit(n uint8, pos uint8) bool {
-	n = n & (1 << pos)
-	return n > 0
 }
