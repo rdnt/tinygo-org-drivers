@@ -74,7 +74,7 @@ func (d *Device) initialize() {
 		d.buffer[i] = 0xff
 	}
 
-	var bytesPerLine = d.width / 8
+	bytesPerLine := d.width / 8
 
 	d.lineBuf = make([]byte, bytesPerLine+2)
 }
@@ -83,15 +83,15 @@ func (d *Device) initialize() {
 // color.RGBA{0, 0, 0, 255} is considered transparent, anything else
 // will enable a pixel on the screen.
 func (d *Device) SetPixel(x, y int16, c color.RGBA) {
-	i := x + y*d.width
+	bitPos := x + y*d.width
 
-	div := i / 8
-	mod := uint8(i % 8)
+	div := bitPos / 8
+	mod := uint8(bitPos % 8)
 
 	prev := hasBit(d.buffer[div], mod)
-	var curr bool
+	curr := true
 	if c.R == 0 && c.G == 0 && c.B == 0 && c.A == 255 {
-		curr = true
+		curr = false
 	}
 
 	if prev == curr {
@@ -134,8 +134,8 @@ func (d *Device) Display() error {
 
 	d.toggleVcom()
 
-	var bytesPerLine = d.width / 8
-	var totalBytes = (d.width * d.height) / 8
+	bytesPerLine := d.width / 8
+	totalBytes := (d.width * d.height) / 8
 
 	for i := int16(0); i < totalBytes; i += bytesPerLine {
 		// first byte is current line (0-indexed)
@@ -183,12 +183,31 @@ func (d *Device) Clear() error {
 
 // ClearBuffer clears the in-memory buffer. The display is not updated.
 func (d *Device) ClearBuffer() {
-	for i := 0; i < len(d.buffer); i++ {
-		d.buffer[i] = 0xff
+	// detect what rows need to be reset on the next render
+	for y := int16(0); y < d.height; y++ {
+		invalidateRow := false
+		for x := int16(0); x < d.width; x++ {
+			bitPos := x + y*d.width
+
+			div := bitPos / 8
+			mod := uint8(bitPos % 8)
+
+			if !hasBit(d.buffer[div], mod) {
+				invalidateRow = true
+				break
+			}
+		}
+
+		if invalidateRow {
+			linediv := y / 8
+			linemod := uint8(y % 8)
+			d.lineDiff[linediv] = setBit(d.lineDiff[linediv], linemod)
+		}
 	}
 
-	for i := 0; i < len(d.lineDiff); i++ {
-		d.lineDiff[i] = 0x00
+	// reset in-memory buffer
+	for i := 0; i < len(d.buffer); i++ {
+		d.buffer[i] = 0xff
 	}
 }
 
