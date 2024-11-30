@@ -80,8 +80,8 @@ func (d *Device) initialize() {
 }
 
 // SetPixel enables or disables a pixel in the buffer
-// color.RGBA{0, 0, 0, 255} is considered transparent, anything else
-// will enable a pixel on the screen.
+// color.RGBA{0, 0, 0, 255} is considered transparent (white), anything else
+// will enable a pixel on the screen, making it appear less reflective (black).
 func (d *Device) SetPixel(x, y int16, c color.RGBA) {
 	bitPos := x + y*d.width
 
