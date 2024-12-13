@@ -29,7 +29,7 @@ type Pin interface {
 //
 // The driver includes optimizations (frame and per-line invalidation) that
 // only transmit the changed lines to the display. These optimizations are on
-// by default, and they can be disabled with the respective Config option.
+// by default, and they can be disabled with the respective config option.
 type Device struct {
 	bus          drivers.SPI
 	csPin        Pin
@@ -48,7 +48,8 @@ type Config struct {
 	Width  int16
 	Height int16
 
-	// DisableOptimizations disables frame and line invalidation diffing.
+	// DisableOptimizations disables frame and line invalidation optimizations.
+	// Useful if constant frame times are desired.
 	DisableOptimizations bool
 }
 
@@ -94,6 +95,7 @@ func (d *Device) initialize() {
 	// protocol-required padding for each line apriori (easier to transfer).
 	d.bufferSize = d.bytesPerLine * d.height
 	d.buffer = make([]byte, d.bufferSize)
+	// A bit being 1 is white (reflective), 0 is black (less reflective).
 	for i := range d.buffer {
 		d.buffer[i] = 0xff
 	}
@@ -102,13 +104,14 @@ func (d *Device) initialize() {
 	d.txBuf = make([]byte, 2)
 
 	if d.diffing {
-		// buffer to store the changed lines. First *bit* is whether any line has
-		// changed at all, followed by N bits, one for each line.
+		// buffer to store the changed lines. First bit is whether any line has
+		// changed at all (i.e. the frame is invalid), followed by N bits,
+		// one for each line.
 		d.lineDiff = make([]byte, bitfieldBufLen(1+d.height))
 	}
 }
 
-// SetPixel enables or disables a pixel in the buffer
+// SetPixel enables or disables a pixel in the buffer.
 // color.RGBA{0, 0, 0, 255} is considered transparent (reflective, white),
 // anything else will enable a pixel on the screen (make it appear less
 // reflective, black).
@@ -136,12 +139,7 @@ func (d *Device) SetPixel(x, y int16, c color.RGBA) {
 	}
 
 	if d.diffing {
-		// mark the frame as invalidated
-		d.lineDiff[0] = setBit(d.lineDiff[0], 0)
-
-		linediv := (y + 1) / 8
-		linemod := uint8((y + 1) % 8)
-		d.lineDiff[linediv] = setBit(d.lineDiff[linediv], linemod)
+		d.invalidateLine(y)
 	}
 }
 
@@ -171,20 +169,20 @@ func (d *Device) Display() error {
 		}()
 	}
 
-	// start transfer
-	d.csPin.High()
-
 	cmd := bitWriteCmd | d.vcom
 
 	d.toggleVcom()
 
-	// padding to use for high bits of line numbers that overflow 8 bits
+	// Padding to use for high bits of line numbers that overflow 8 bits.
 	var hiPad = uint8(0)
 	if d.height >= 512 {
 		hiPad = 3 + 3 // 3 mode bits + 3 low bits
 	} else if d.height >= 256 {
 		hiPad = 3 + 4 // 3 mode bits + 4 low bits
 	}
+
+	// start transfer
+	d.csPin.High()
 
 	for i := int16(0); i < d.height; i++ {
 		if d.diffing {
@@ -237,17 +235,18 @@ func (d *Device) Display() error {
 
 // holdDisplay simply toggles VCOM without updating any lines.
 func (d *Device) holdDisplay() error {
+	d.txBuf[0] = d.vcom
+	d.txBuf[1] = 0x00
+
+	d.toggleVcom()
+
 	// begin transaction
 	d.csPin.High()
 
-	d.txBuf[0] = d.vcom
-	d.txBuf[1] = 0x00
 	err := d.bus.Tx(d.txBuf, nil)
 	if err != nil {
 		return err
 	}
-
-	d.toggleVcom()
 
 	// end transaction
 	d.csPin.Low()
@@ -271,36 +270,37 @@ func (d *Device) ClearBuffer() {
 		return
 	}
 
-	// detect what rows need to be reset on the next render
 	if d.diffing {
-		for y := int16(0); y < d.height; y++ {
-			offset := y * d.bytesPerLine
-
-			updateLine := false
-			for x := int16(0); x < d.width; x++ {
-				div := offset + x/8
-				mod := uint8(x % 8)
-
-				if !hasBit(d.buffer[div], mod) {
-					updateLine = true
-					break
-				}
-			}
-
-			if updateLine {
-				// mark the frame as invalidated
-				d.lineDiff[0] = setBit(d.lineDiff[0], 0)
-
-				linediv := (y + 1) / 8
-				linemod := uint8((y + 1) % 8)
-				d.lineDiff[linediv] = setBit(d.lineDiff[linediv], linemod)
-			}
-		}
+		// detect what rows need to be reset on the next render
+		d.invalidateModifiedLines()
 	}
 
-	// reset in-memory buffer to high
+	// reset the in-memory buffer
 	for i := 0; i < len(d.buffer); i++ {
 		d.buffer[i] = 0xff
+	}
+}
+
+// invalidateModifiedLines marks any line that has at least a single black pixel
+// as invalidated. Padding bits, if any, are always 1.
+func (d *Device) invalidateModifiedLines() {
+	for y := int16(0); y < d.height; y++ {
+		offset := y * d.bytesPerLine
+
+		updateLine := false
+		for x := int16(0); x < d.width; x++ {
+			div := offset + x/8
+			mod := uint8(x % 8)
+
+			if !hasBit(d.buffer[div], mod) {
+				updateLine = true
+				break
+			}
+		}
+
+		if updateLine {
+			d.invalidateLine(y)
+		}
 	}
 }
 
@@ -312,22 +312,34 @@ func (d *Device) ClearDisplay() error {
 		return errors.New("display not configured")
 	}
 
+	d.txBuf[0] = d.vcom | bitClear
+	d.txBuf[1] = 0x00
+
+	d.toggleVcom()
+
 	// begin transaction
 	d.csPin.High()
 
-	d.txBuf[0] = d.vcom | bitClear
-	d.txBuf[1] = 0x00
 	err := d.bus.Tx(d.txBuf, nil)
 	if err != nil {
 		return err
 	}
 
-	d.toggleVcom()
-
 	// end transaction
 	d.csPin.Low()
 
 	return nil
+}
+
+// invalidateLine marks a line and the frame itself as invalidated.
+func (d *Device) invalidateLine(line int16) {
+	// mark the frame as invalidated
+	d.lineDiff[0] = setBit(d.lineDiff[0], 0)
+
+	// mark the line as invalidated
+	linediv := (line + 1) / 8
+	linemod := uint8((line + 1) % 8)
+	d.lineDiff[linediv] = setBit(d.lineDiff[linediv], linemod)
 }
 
 // toggleVcom toggles the VCOM, as is instructed by the datasheet.
