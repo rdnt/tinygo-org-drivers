@@ -56,14 +56,18 @@ func Test_bitfieldBufLen(t *testing.T) {
 	}
 }
 
-type mockBus struct{}
+type mockBus struct {
+	b []byte
+}
 
-func (m mockBus) Tx(w, r []byte) error {
+func (m *mockBus) Tx(w, _ []byte) error {
+	m.b = append(m.b, w...)
 	return nil
 }
 
-func (m mockBus) Transfer(b byte) (byte, error) {
-	return b, nil
+func (m *mockBus) Transfer(b byte) (byte, error) {
+	m.b = append(m.b, b)
+	return 0x00, nil
 }
 
 type mockPin struct{}
@@ -97,7 +101,7 @@ func Test_Device(t *testing.T) {
 		})
 	}
 
-	spi := mockBus{}
+	spi := &mockBus{}
 	pin := mockPin{}
 	display := New(spi, pin)
 
@@ -128,4 +132,104 @@ func Test_Device(t *testing.T) {
 
 		display.ClearBuffer()
 	}
+}
+
+func Test_HiPad(t *testing.T) {
+	c := qt.New(t)
+
+	spi := &mockBus{}
+	pin := mockPin{}
+	display := New(spi, pin)
+
+	t.Run("LS011B7DH03, 8-bit address", func(t *testing.T) {
+		t.Cleanup(func() {
+			spi.b = nil
+		})
+
+		display.Configure(Config{
+			Width:                160,
+			Height:               68,
+			DisableOptimizations: false,
+		})
+
+		display.SetPixel(0, display.height-1, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		err := display.Display()
+		c.Assert(err, qt.Equals, nil)
+
+		// 160 perfectly divisible by 16, so 20 bytes of pixel data
+		c.Assert(spi.b, qt.HasLen, 2+20+2)
+
+		// line is 1-indexed on the wire (67+1)
+		// 68 in binary
+		// 0b01000100
+
+		//                                    DDDDDMMM
+		c.Assert(spi.b[0], qt.Equals, uint8(0b00000011)) // mode 1, vcom is high on first run
+
+		c.Assert(spi.b[1], qt.Equals, uint8(0b01000100)) // the actual address
+	})
+
+	t.Run("LS018B7DH02, 9-bit address", func(t *testing.T) {
+		t.Cleanup(func() {
+			spi.b = nil
+		})
+
+		display.Configure(Config{
+			Width:                230,
+			Height:               303,
+			DisableOptimizations: false,
+		})
+
+		display.SetPixel(0, display.height-1, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		err := display.Display()
+		c.Assert(err, qt.Equals, nil)
+
+		// 2 first bytes command+address
+		// 230 bits are not divisible by 16, 240 is (15*16), so 30 bytes for line data
+		// 2 trailing bytes
+		c.Assert(spi.b, qt.HasLen, 2+30+2)
+
+		// line is 1-indexed on the wire (302+1)
+		// 303 in binary (split in 2 bytes)
+		//          R
+		// 0b00000001 0b00101111
+		//          ^
+
+		//                                    RDDDDMMM
+		c.Assert(spi.b[0], qt.Equals, uint8(0b10000011)) // mode 1, vcom is high on first run
+		//                                    ^
+
+		c.Assert(spi.b[1], qt.Equals, uint8(0b00101111)) // rest of the address (low 8 bits)
+	})
+
+	t.Run("LS032B7DD02, 10-bit address", func(t *testing.T) {
+		t.Cleanup(func() {
+			spi.b = nil
+		})
+
+		display.Configure(Config{
+			Width:                336,
+			Height:               536,
+			DisableOptimizations: false,
+		})
+
+		display.SetPixel(0, display.height-1, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		err := display.Display()
+		c.Assert(err, qt.Equals, nil)
+
+		c.Assert(spi.b, qt.HasLen, 2+336/8+2) // 2 command+address, width / 2, 2 trailing bytes
+
+		// line is 1-indexed on the wire (535+1)
+		// 536 in binary (split in 2 bytes)
+		//         RR
+		// 0b00000010 0b00011000
+		//         ^^
+
+		//                                    RRDDDMMM
+		c.Assert(spi.b[0], qt.Equals, uint8(0b10000011)) // mode 1, vcom is high on first run
+		//                                    ^^
+
+		c.Assert(spi.b[1], qt.Equals, uint8(0b00011000)) // rest of the address (low 8 bits)
+	})
+
 }

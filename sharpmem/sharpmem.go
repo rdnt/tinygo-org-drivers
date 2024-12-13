@@ -1,15 +1,16 @@
 package sharpmem
 
 import (
+	"errors"
 	"image/color"
 
 	"tinygo.org/x/drivers"
 )
 
 const (
-	bitWriteCmd uint8 = 0x01
-	bitVcom     uint8 = 0x02
-	bitClear    uint8 = 0x04
+	bitWriteCmd uint8 = 0b00000001
+	bitVcom     uint8 = 0b00000010
+	bitClear    uint8 = 0b00000100
 )
 
 type Pin interface {
@@ -23,6 +24,8 @@ type Pin interface {
 // Supported SKUs include:
 // LS010B7DH04, LS011B7DH03, LS012B7DD01, LS013B7DH03, LS013B7DH05,
 // LS018B7DH02, LS027B7DH01, LS027B7DH01A, LS032B7DD02, LS044Q7DH01
+//
+// Note: Only SKU LS011B7DH03 (160x68) has been tested as of writing.
 //
 // The driver includes optimizations (frame and per-line invalidation) that
 // only transmit the changed lines to the display. These optimizations are on
@@ -45,7 +48,7 @@ type Config struct {
 	Width  int16
 	Height int16
 
-	// DisableOptimizations disables frame and line invalidation diff.
+	// DisableOptimizations disables frame and line invalidation diffing.
 	DisableOptimizations bool
 }
 
@@ -110,6 +113,10 @@ func (d *Device) initialize() {
 // anything else will enable a pixel on the screen (make it appear less
 // reflective, black).
 func (d *Device) SetPixel(x, y int16, c color.RGBA) {
+	if d.width == 0 {
+		return
+	}
+
 	offset := y * d.bytesPerLine
 
 	div := offset + x/8
@@ -147,6 +154,10 @@ func (d *Device) Size() (x, y int16) {
 // optimizations are enabled. It should be called at >=1hz, even if the
 // buffer hasn't been modified.
 func (d *Device) Display() error {
+	if d.width == 0 {
+		return errors.New("display not configured")
+	}
+
 	if d.diffing {
 		if !hasBit(d.lineDiff[0], 0) {
 			// no pixels have been modified, simply toggle VCOM
@@ -167,6 +178,14 @@ func (d *Device) Display() error {
 
 	d.toggleVcom()
 
+	// padding to use for high bits of line numbers that overflow 8 bits
+	var hiPad = uint8(0)
+	if d.height >= 512 {
+		hiPad = 3 + 3 // 3 mode bits + 3 low bits
+	} else if d.height >= 256 {
+		hiPad = 3 + 4 // 3 mode bits + 4 low bits
+	}
+
 	for i := int16(0); i < d.height; i++ {
 		if d.diffing {
 			// Skip rendering lines that haven't changed.
@@ -181,7 +200,9 @@ func (d *Device) Display() error {
 		// (1-indexed) if it overflows 8-bits.
 		// The last 3 bits are the command for the first line and dummy bits
 		// for subsequent lines (set as command for simplicity)
-		d.txBuf[0] = cmd | uint8((i+1)>>8<<3)
+		hi := uint8((i + 1) >> 8)
+		hi = hi << hiPad
+		d.txBuf[0] = cmd | hi
 
 		// The second byte is the low bits of the current line (1-indexed).
 		// for <8 bits cases, the high bits are dummy, so we leave them as 0.
@@ -236,12 +257,20 @@ func (d *Device) holdDisplay() error {
 
 // Clear clears both the in-memory buffer and the display.
 func (d *Device) Clear() error {
+	if d.width == 0 {
+		return errors.New("display not configured")
+	}
+
 	d.ClearBuffer()
 	return d.ClearDisplay()
 }
 
 // ClearBuffer clears the in-memory buffer. The display is not updated.
 func (d *Device) ClearBuffer() {
+	if d.width == 0 {
+		return
+	}
+
 	// detect what rows need to be reset on the next render
 	if d.diffing {
 		for y := int16(0); y < d.height; y++ {
@@ -279,6 +308,10 @@ func (d *Device) ClearBuffer() {
 // subsequent call to Display() will re-render the content as it was before
 // clearing.
 func (d *Device) ClearDisplay() error {
+	if d.width == 0 {
+		return errors.New("display not configured")
+	}
+
 	// begin transaction
 	d.csPin.High()
 
