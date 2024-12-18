@@ -82,14 +82,16 @@ func Test_Device(t *testing.T) {
 	c := qt.New(t)
 
 	cfgs := []Config{
-		{Width: 128, Height: 128}, // LS010B7DH04, LS013B7DH03
-		{Width: 160, Height: 68},  // LS011B7DH03
-		{Width: 184, Height: 38},  // LS012B7DD01
-		{Width: 144, Height: 168}, // LS013B7DH05
-		{Width: 230, Height: 303}, // LS018B7DH02
-		{Width: 400, Height: 240}, // LS027B7DH01, LS027B7DH01A
-		{Width: 336, Height: 536}, //LS032B7DD02
-		{Width: 320, Height: 240}, //LS044Q7DH01
+		ConfigLS010B7DH04,
+		ConfigLS011B7DH03,
+		ConfigLS012B7DD01,
+		ConfigLS013B7DH03,
+		ConfigLS013B7DH05,
+		ConfigLS018B7DH02,
+		ConfigLS027B7DH01,
+		ConfigLS027B7DH01A,
+		ConfigLS032B7DD02,
+		ConfigLS044Q7DH01,
 	}
 
 	cfgLen := len(cfgs)
@@ -146,11 +148,7 @@ func Test_HiPad(t *testing.T) {
 			spi.b = nil
 		})
 
-		display.Configure(Config{
-			Width:                160,
-			Height:               68,
-			DisableOptimizations: false,
-		})
+		display.Configure(ConfigLS011B7DH03)
 
 		display.SetPixel(0, display.height-1, color.RGBA{R: 255, G: 255, B: 255, A: 255})
 		err := display.Display()
@@ -174,11 +172,7 @@ func Test_HiPad(t *testing.T) {
 			spi.b = nil
 		})
 
-		display.Configure(Config{
-			Width:                230,
-			Height:               303,
-			DisableOptimizations: false,
-		})
+		display.Configure(ConfigLS018B7DH02)
 
 		display.SetPixel(0, display.height-1, color.RGBA{R: 255, G: 255, B: 255, A: 255})
 		err := display.Display()
@@ -207,11 +201,7 @@ func Test_HiPad(t *testing.T) {
 			spi.b = nil
 		})
 
-		display.Configure(Config{
-			Width:                336,
-			Height:               536,
-			DisableOptimizations: false,
-		})
+		display.Configure(ConfigLS032B7DD02)
 
 		display.SetPixel(0, display.height-1, color.RGBA{R: 255, G: 255, B: 255, A: 255})
 		err := display.Display()

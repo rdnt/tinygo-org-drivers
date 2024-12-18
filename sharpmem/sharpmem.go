@@ -13,6 +13,19 @@ const (
 	bitClear    uint8 = 0b00000100
 )
 
+var (
+	ConfigLS010B7DH04  = Config{Width: 128, Height: 128}
+	ConfigLS011B7DH03  = Config{Width: 160, Height: 68}
+	ConfigLS012B7DD01  = Config{Width: 184, Height: 38}
+	ConfigLS013B7DH03  = ConfigLS010B7DH04
+	ConfigLS013B7DH05  = Config{Width: 144, Height: 168}
+	ConfigLS018B7DH02  = Config{Width: 230, Height: 303}
+	ConfigLS027B7DH01  = Config{Width: 400, Height: 240}
+	ConfigLS027B7DH01A = ConfigLS027B7DH01
+	ConfigLS032B7DD02  = Config{Width: 336, Height: 536}
+	ConfigLS044Q7DH01  = Config{Width: 320, Height: 240}
+)
+
 type Pin interface {
 	High()
 	Low()
