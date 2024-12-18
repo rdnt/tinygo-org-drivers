@@ -133,6 +133,11 @@ func (d *Device) SetPixel(x, y int16, c color.RGBA) {
 		return
 	}
 
+	// bounds check
+	if x < 0 || x >= d.width || y < 0 || y >= d.height {
+		return
+	}
+
 	offset := y * d.bytesPerLine
 
 	div := offset + x/8
