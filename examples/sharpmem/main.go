@@ -9,46 +9,56 @@ import (
 	"tinygo.org/x/drivers/sharpmem"
 )
 
-func initSPI() error {
-	machine.P0_06.Configure(machine.PinConfig{Mode: machine.PinOutput})
+var (
+	// example wiring using a nice!view and nice!nano:
+	// (view)   (nano)
+	// MOSI --> P0.24
+	// SCK ---> P0.22
+	// GND ---> GND
+	// VCC ---> 3.3V
+	// CS ----> P0.06
 
-	err := machine.SPI0.Configure(machine.SPIConfig{
+	spi = machine.SPI0
+
+	sckPin = machine.SPI0_SCK_PIN // SCK
+	sdoPin = machine.SPI0_SDO_PIN // MOSI
+	sdiPin = machine.SPI0_SDI_PIN // (any pin)
+
+	csPin = machine.P0_06 // CS
+)
+
+func main() {
+	time.Sleep(time.Second)
+
+	err := spi.Configure(machine.SPIConfig{
 		Frequency: 2000000,
-		SCK:       machine.P0_20,
-		SDO:       machine.P0_17,
-		SDI:       machine.P0_25,
+		SCK:       sckPin,
+		SDO:       sdoPin,
+		SDI:       sdiPin,
 		Mode:      0,
 		LSBFirst:  true,
 	})
 	if err != nil {
 		println("spi.Configure() failed, error:", err.Error())
-		return err
-	}
-
-	return nil
-}
-
-func main() {
-	time.Sleep(time.Second)
-
-	err := initSPI()
-	if err != nil {
 		return
 	}
 
-	cfg := sharpmem.ConfigLS011B7DH03
+	csPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
 
-	display := sharpmem.New(machine.SPI0, machine.P0_06)
+	display := sharpmem.New(spi, csPin)
+
+	cfg := sharpmem.ConfigLS011B7DH03
 	display.Configure(cfg)
 
+	// clear the display before first use
 	err = display.Clear()
 	if err != nil {
 		println("display.Clear() failed, error:", err.Error())
 		return
 	}
 
+	// random boxes pop into and out of existence
 	for {
-
 		x0 := int16(rand.IntN(int(cfg.Width - 7)))
 		y0 := int16(rand.IntN(int(cfg.Height - 7)))
 
@@ -57,6 +67,7 @@ func main() {
 			c := color.RGBA{R: 255, G: 255, B: 255, A: 255}
 
 			if x2 >= 8 {
+				// effectively erases the box after it showed up
 				x2 = x2 - 8
 				c = color.RGBA{R: 0, G: 0, B: 0, A: 255}
 			}
@@ -75,9 +86,5 @@ func main() {
 
 			time.Sleep(33 * time.Millisecond)
 		}
-
-		time.Sleep(33 * time.Millisecond)
-
-		display.ClearBuffer()
 	}
 }
